@@ -15,4 +15,4 @@ const CrispChat = () => {
     return null;
 };
 
-export default CrispChat;
+export const CrispChat = CrispChat;

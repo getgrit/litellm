@@ -26,7 +26,7 @@ function HomepageHeader() {
   );
 }
 
-export default function Home() {
+export function Home() {
   const {siteConfig} = useDocusaurusContext();
   return (
     <Layout
