@@ -35,7 +35,7 @@ RUN pip install dist/*.whl
 # install dependencies as wheels
 RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
-# install semantic-cache [Experimental]- we need this here and not in requirements.txt because redisvl pins to pydantic 1.0 
+# install semantic-cache [Experimental]- we need this here and not in requirements.txt because redisvl pins to pydantic 1.0
 RUN pip install redisvl==0.0.7 --no-deps
 
 # ensure pyjwt is used, not jwt
@@ -61,6 +61,10 @@ COPY --from=builder /wheels/ /wheels/
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
 
+# copy in the requirmeents for morons
+COPY custom/requirements.txt /app/custom/requirements.txt
+RUN pip install -r custom/requirements.txt
+
 # Generate prisma client
 RUN prisma generate
 RUN chmod +x entrypoint.sh
@@ -69,5 +73,5 @@ EXPOSE 4000/tcp
 
 ENTRYPOINT ["litellm"]
 
-# Append "--detailed_debug" to the end of CMD to view detailed debug logs 
+# Append "--detailed_debug" to the end of CMD to view detailed debug logs
 CMD ["--port", "4000"]

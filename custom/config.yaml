@@ -27,30 +27,31 @@ model_list:
   - model_name: claude-3-opus-20240229
     litellm_params:
       model: claude-3-opus-20240229
-      api_key: 'os.environ/ANTHROPIC_API_KEY'
+      api_key: "os.environ/ANTHROPIC_API_KEY"
   - model_name: claude-3-sonnet-20240229
     litellm_params:
       model: claude-3-sonnet-20240229
-      api_key: 'os.environ/ANTHROPIC_API_KEY'
+      api_key: "os.environ/ANTHROPIC_API_KEY"
   - model_name: claude-3-haiku-20240307
     litellm_params:
       model: claude-3-haiku-20240307
-      api_key: 'os.environ/ANTHROPIC_API_KEY'
+      api_key: "os.environ/ANTHROPIC_API_KEY"
   - model_name: claude-2
     litellm_params:
       model: claude-2
-      api_key: 'os.environ/ANTHROPIC_API_KEY'
+      api_key: "os.environ/ANTHROPIC_API_KEY"
   - model_name: claude-2.0
     litellm_params:
       model: claude-2
-      api_key: 'os.environ/ANTHROPIC_API_KEY'
+      api_key: "os.environ/ANTHROPIC_API_KEY"
 litellm_settings:
   drop_params: True
   otel: True
   set_verbose: True
   cache: True
   cache_params:
-    type: 'redis'
+    type: "redis"
     host: os.environ/REDIS_HOST
     port: os.environ/REDIS_PORT
     password: os.environ/REDIS_PASSWORD
+  success_callback: ["traceloop"]
