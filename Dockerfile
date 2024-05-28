@@ -61,7 +61,7 @@ COPY --from=builder /wheels/ /wheels/
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
 
-# copy in the requirmeents for morons
+# copy in our custom requirements
 COPY custom/requirements.txt /app/custom/requirements.txt
 RUN pip install -r custom/requirements.txt
 
@@ -70,6 +70,9 @@ RUN prisma generate
 RUN chmod +x entrypoint.sh
 
 EXPOSE 4000/tcp
+
+# Copy in our config
+COPY custom/config.yaml /app/config.yaml
 
 ENTRYPOINT ["litellm"]
 
