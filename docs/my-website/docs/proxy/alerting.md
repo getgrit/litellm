@@ -8,6 +8,7 @@ Get alerts for:
 - Budget Tracking per key/user
 - Spend Reports - Weekly & Monthly spend per Team, Tag
 - Failed db read/writes
+- Model outage alerting
 - Daily Reports:
     - **LLM** Top 5 slowest deployments
     - **LLM** Top 5 deployments with most failed requests
@@ -74,21 +75,19 @@ general_settings:
 All Possible Alert Types
 
 ```python
-alert_types: 
-Optional[
-List[
-    Literal[
-        "llm_exceptions",
-        "llm_too_slow",
-        "llm_requests_hanging",
-        "budget_alerts",
-        "db_exceptions",
-        "daily_reports",
-        "spend_reports",
-        "cooldown_deployment",
-        "new_model_added",
-    ]
+AlertType = Literal[
+    "llm_exceptions",
+    "llm_too_slow",
+    "llm_requests_hanging",
+    "budget_alerts",
+    "db_exceptions",
+    "daily_reports",
+    "spend_reports",
+    "cooldown_deployment",
+    "new_model_added",
+    "outage_alerts",
 ]
+
 ```
 
 
@@ -179,25 +178,56 @@ curl -X GET --location 'http://0.0.0.0:4000/health/services?service=webhook' \
 }
 ```
 
-**API Spec for Webhook Event**
+## **API Spec for Webhook Event**
 
 - `spend` *float*: The current spend amount for the 'event_group'.
-- `max_budget` *float*: The maximum allowed budget for the 'event_group'.
+- `max_budget` *float or null*: The maximum allowed budget for the 'event_group'. null if not set. 
 - `token` *str*: A hashed value of the key, used for authentication or identification purposes.
-- `user_id` *str or null*: The ID of the user associated with the event (optional).
+- `customer_id` *str or null*: The ID of the customer associated with the event (optional).
+- `internal_user_id` *str or null*: The ID of the internal user associated with the event (optional).
 - `team_id` *str or null*: The ID of the team associated with the event (optional).
-- `user_email` *str or null*: The email of the user associated with the event (optional).
+- `user_email` *str or null*: The email of the internal user associated with the event (optional).
 - `key_alias` *str or null*: An alias for the key associated with the event (optional).
 - `projected_exceeded_date` *str or null*: The date when the budget is projected to be exceeded, returned when 'soft_budget' is set for key (optional).
 - `projected_spend` *float or null*: The projected spend amount, returned when 'soft_budget' is set for key (optional).
 - `event` *Literal["budget_crossed", "threshold_crossed", "projected_limit_exceeded"]*: The type of event that triggered the webhook. Possible values are:
+    * "spend_tracked": Emitted whenver spend is tracked for a customer id. 
     * "budget_crossed": Indicates that the spend has exceeded the max budget.
     * "threshold_crossed": Indicates that spend has crossed a threshold (currently sent when 85% and 95% of budget is reached).
     * "projected_limit_exceeded": For "key" only - Indicates that the projected spend is expected to exceed the soft budget threshold.
-- `event_group` *Literal["user", "key", "team", "proxy"]*: The group associated with the event. Possible values are:
-    * "user": The event is related to a specific user.
+- `event_group` *Literal["customer", "internal_user", "key", "team", "proxy"]*: The group associated with the event. Possible values are:
+    * "customer": The event is related to a specific customer
+    * "internal_user": The event is related to a specific internal user.
     * "key": The event is related to a specific key.
     * "team": The event is related to a team.
     * "proxy": The event is related to a proxy.
 
 - `event_message` *str*: A human-readable description of the event.
+
+## Advanced - Region-outage alerting (✨ Enterprise feature)
+
+:::info
+[Get a free 2-week license](https://forms.gle/P518LXsAZ7PhXpDn8)
+:::
+
+Setup alerts if a provider region is having an outage. 
+
+```yaml
+general_settings:
+    alerting: ["slack"]
+    alert_types: ["region_outage_alerts"] 
+```
+
+By default this will trigger if multiple models in a region fail 5+ requests in 1 minute. '400' status code errors are not counted (i.e. BadRequestErrors).
+
+Control thresholds with: 
+
+```yaml
+general_settings:
+    alerting: ["slack"]
+    alert_types: ["region_outage_alerts"] 
+    alerting_args:
+        region_outage_alert_ttl: 60 # time-window in seconds
+        minor_outage_alert_threshold: 5 # number of errors to trigger a minor alert
+        major_outage_alert_threshold: 10 # number of errors to trigger a major alert
+```

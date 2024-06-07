@@ -1,7 +1,7 @@
 # What is this?
 ## Initial implementation of calling bedrock via httpx client (allows for async calls).
 ## V1 - covers cohere + anthropic claude-3 support
-
+from functools import partial
 import os, types
 import json
 from enum import Enum
@@ -44,6 +44,7 @@ from .base import BaseLLM
 import httpx  # type: ignore
 from .bedrock import BedrockError, convert_messages_to_prompt, ModelResponseIterator
 from litellm.types.llms.bedrock import *
+import urllib.parse
 
 
 class AmazonCohereChatConfig:
@@ -144,6 +145,37 @@ class AmazonCohereChatConfig:
         return optional_params
 
 
+async def make_call(
+    client: Optional[AsyncHTTPHandler],
+    api_base: str,
+    headers: dict,
+    data: str,
+    model: str,
+    messages: list,
+    logging_obj,
+):
+    if client is None:
+        client = AsyncHTTPHandler()  # Create a new client if none provided
+
+    response = await client.post(api_base, headers=headers, data=data, stream=True)
+
+    if response.status_code != 200:
+        raise BedrockError(status_code=response.status_code, message=response.text)
+
+    decoder = AWSEventStreamDecoder(model=model)
+    completion_stream = decoder.aiter_bytes(response.aiter_bytes(chunk_size=1024))
+
+    # LOGGING
+    logging_obj.post_call(
+        input=messages,
+        api_key="",
+        original_response=completion_stream,  # Pass the completion stream for logging
+        additional_args={"complete_input_dict": data},
+    )
+
+    return completion_stream
+
+
 class BedrockLLM(BaseLLM):
     """
     Example call
@@ -216,6 +248,7 @@ class BedrockLLM(BaseLLM):
         aws_session_name: Optional[str] = None,
         aws_profile_name: Optional[str] = None,
         aws_role_name: Optional[str] = None,
+        aws_web_identity_token: Optional[str] = None,
     ):
         """
         Return a boto3.Credentials object
@@ -230,6 +263,7 @@ class BedrockLLM(BaseLLM):
             aws_session_name,
             aws_profile_name,
             aws_role_name,
+            aws_web_identity_token,
         ]
 
         # Iterate over parameters and update if needed
@@ -246,10 +280,43 @@ class BedrockLLM(BaseLLM):
             aws_session_name,
             aws_profile_name,
             aws_role_name,
+            aws_web_identity_token,
         ) = params_to_check
 
         ### CHECK STS ###
-        if aws_role_name is not None and aws_session_name is not None:
+        if (
+            aws_web_identity_token is not None
+            and aws_role_name is not None
+            and aws_session_name is not None
+        ):
+            oidc_token = get_secret(aws_web_identity_token)
+
+            if oidc_token is None:
+                raise BedrockError(
+                    message="OIDC token could not be retrieved from secret manager.",
+                    status_code=401,
+                )
+
+            sts_client = boto3.client("sts")
+
+            # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
+            # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
+            sts_response = sts_client.assume_role_with_web_identity(
+                RoleArn=aws_role_name,
+                RoleSessionName=aws_session_name,
+                WebIdentityToken=oidc_token,
+                DurationSeconds=3600,
+            )
+
+            session = boto3.Session(
+                aws_access_key_id=sts_response["Credentials"]["AccessKeyId"],
+                aws_secret_access_key=sts_response["Credentials"]["SecretAccessKey"],
+                aws_session_token=sts_response["Credentials"]["SessionToken"],
+                region_name=aws_region_name,
+            )
+
+            return session.get_credentials()
+        elif aws_role_name is not None and aws_session_name is not None:
             sts_client = boto3.client(
                 "sts",
                 aws_access_key_id=aws_access_key_id,  # [OPTIONAL]
@@ -260,7 +327,16 @@ class BedrockLLM(BaseLLM):
                 RoleArn=aws_role_name, RoleSessionName=aws_session_name
             )
 
-            return sts_response["Credentials"]
+            # Extract the credentials from the response and convert to Session Credentials
+            sts_credentials = sts_response["Credentials"]
+            from botocore.credentials import Credentials
+
+            credentials = Credentials(
+                access_key=sts_credentials["AccessKeyId"],
+                secret_key=sts_credentials["SecretAccessKey"],
+                token=sts_credentials["SessionToken"],
+            )
+            return credentials
         elif aws_profile_name is not None:  ### CHECK SESSION ###
             # uses auth values from AWS profile usually stored in ~/.aws/credentials
             client = boto3.Session(profile_name=aws_profile_name)
@@ -524,6 +600,16 @@ class BedrockLLM(BaseLLM):
 
         return model_response
 
+    def encode_model_id(self, model_id: str) -> str:
+        """
+        Double encode the model ID to ensure it matches the expected double-encoded format.
+        Args:
+            model_id (str): The model ID to encode.
+        Returns:
+            str: The double-encoded model ID.
+        """
+        return urllib.parse.quote(model_id, safe="")
+
     def completion(
         self,
         model: str,
@@ -552,6 +638,12 @@ class BedrockLLM(BaseLLM):
 
         ## SETUP ##
         stream = optional_params.pop("stream", None)
+        modelId = optional_params.pop("model_id", None)
+        if modelId is not None:
+            modelId = self.encode_model_id(model_id=modelId)
+        else:
+            modelId = model
+
         provider = model.split(".")[0]
 
         ## CREDENTIALS ##
@@ -565,6 +657,7 @@ class BedrockLLM(BaseLLM):
         aws_bedrock_runtime_endpoint = optional_params.pop(
             "aws_bedrock_runtime_endpoint", None
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
+        aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
 
         ### SET REGION NAME ###
         if aws_region_name is None:
@@ -592,6 +685,7 @@ class BedrockLLM(BaseLLM):
             aws_session_name=aws_session_name,
             aws_profile_name=aws_profile_name,
             aws_role_name=aws_role_name,
+            aws_web_identity_token=aws_web_identity_token,
         )
 
         ### SET RUNTIME ENDPOINT ###
@@ -609,9 +703,9 @@ class BedrockLLM(BaseLLM):
             endpoint_url = f"https://bedrock-runtime.{aws_region_name}.amazonaws.com"
 
         if (stream is not None and stream == True) and provider != "ai21":
-            endpoint_url = f"{endpoint_url}/model/{model}/invoke-with-response-stream"
+            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke-with-response-stream"
         else:
-            endpoint_url = f"{endpoint_url}/model/{model}/invoke"
+            endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
 
         sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
 
@@ -915,7 +1009,7 @@ class BedrockLLM(BaseLLM):
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
-            raise BedrockError(status_code=error_code, message=response.text)
+            raise BedrockError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException as e:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
@@ -951,39 +1045,24 @@ class BedrockLLM(BaseLLM):
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
     ) -> CustomStreamWrapper:
-        if client is None:
-            _params = {}
-            if timeout is not None:
-                if isinstance(timeout, float) or isinstance(timeout, int):
-                    timeout = httpx.Timeout(timeout)
-                _params["timeout"] = timeout
-            self.client = AsyncHTTPHandler(**_params)  # type: ignore
-        else:
-            self.client = client  # type: ignore
+        # The call is not made here; instead, we prepare the necessary objects for the stream.
 
-        response = await self.client.post(api_base, headers=headers, data=data, stream=True)  # type: ignore
-
-        if response.status_code != 200:
-            raise BedrockError(status_code=response.status_code, message=response.text)
-
-        decoder = AWSEventStreamDecoder(model=model)
-
-        completion_stream = decoder.aiter_bytes(response.aiter_bytes(chunk_size=1024))
         streaming_response = CustomStreamWrapper(
-            completion_stream=completion_stream,
+            completion_stream=None,
+            make_call=partial(
+                make_call,
+                client=client,
+                api_base=api_base,
+                headers=headers,
+                data=data,
+                model=model,
+                messages=messages,
+                logging_obj=logging_obj,
+            ),
             model=model,
             custom_llm_provider="bedrock",
             logging_obj=logging_obj,
         )
-
-        ## LOGGING
-        logging_obj.post_call(
-            input=messages,
-            api_key="",
-            original_response=streaming_response,
-            additional_args={"complete_input_dict": data},
-        )
-
         return streaming_response
 
     def embedding(self, *args, **kwargs):

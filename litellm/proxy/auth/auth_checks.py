@@ -15,6 +15,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLMRoutes,
     LiteLLM_OrganizationTable,
+    LitellmUserRoles,
 )
 from typing import Optional, Literal, Union
 from litellm.proxy.utils import PrismaClient
@@ -96,6 +97,40 @@ def common_checks(
             raise Exception(
                 f"'user' param not passed in. 'enforce_user_param'={general_settings['enforce_user_param']}"
             )
+    if general_settings.get("enforced_params", None) is not None:
+        # Enterprise ONLY Feature
+        # we already validate if user is premium_user when reading the config
+        # Add an extra premium_usercheck here too, just incase
+        from litellm.proxy.proxy_server import premium_user, CommonProxyErrors
+
+        if premium_user is not True:
+            raise ValueError(
+                "Trying to use `enforced_params`"
+                + CommonProxyErrors.not_premium_user.value
+            )
+
+        if route in LiteLLMRoutes.openai_routes.value:
+            # loop through each enforced param
+            # example enforced_params ['user', 'metadata', 'metadata.generation_name']
+            for enforced_param in general_settings["enforced_params"]:
+                _enforced_params = enforced_param.split(".")
+                if len(_enforced_params) == 1:
+                    if _enforced_params[0] not in request_body:
+                        raise ValueError(
+                            f"BadRequest please pass param={_enforced_params[0]} in request body. This is a required param"
+                        )
+                elif len(_enforced_params) == 2:
+                    # this is a scenario where user requires request['metadata']['generation_name'] to exist
+                    if _enforced_params[0] not in request_body:
+                        raise ValueError(
+                            f"BadRequest please pass param={_enforced_params[0]} in request body. This is a required param"
+                        )
+                    if _enforced_params[1] not in request_body[_enforced_params[0]]:
+                        raise ValueError(
+                            f"BadRequest please pass param=[{_enforced_params[0]}][{_enforced_params[1]}] in request body. This is a required param"
+                        )
+
+        pass
     # 7. [OPTIONAL] If 'litellm.max_budget' is set (>0), is proxy under budget
     if (
         litellm.max_budget > 0
@@ -123,18 +158,8 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
     """
     for allowed_route in allowed_routes:
         if (
-            allowed_route == LiteLLMRoutes.openai_routes.name
-            and user_route in LiteLLMRoutes.openai_routes.value
-        ):
-            return True
-        elif (
-            allowed_route == LiteLLMRoutes.info_routes.name
-            and user_route in LiteLLMRoutes.info_routes.value
-        ):
-            return True
-        elif (
-            allowed_route == LiteLLMRoutes.management_routes.name
-            and user_route in LiteLLMRoutes.management_routes.value
+            allowed_route in LiteLLMRoutes.__members__
+            and user_route in LiteLLMRoutes[allowed_route].value
         ):
             return True
         elif allowed_route == user_route:
@@ -143,7 +168,11 @@ def _allowed_routes_check(user_route: str, allowed_routes: list) -> bool:
 
 
 def allowed_routes_check(
-    user_role: Literal["proxy_admin", "team", "user"],
+    user_role: Literal[
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.TEAM,
+        LitellmUserRoles.INTERNAL_USER,
+    ],
     user_route: str,
     litellm_proxy_roles: LiteLLM_JWTAuth,
 ) -> bool:
@@ -151,20 +180,14 @@ def allowed_routes_check(
     Check if user -> not admin - allowed to access these routes
     """
 
-    if user_role == "proxy_admin":
-        if litellm_proxy_roles.admin_allowed_routes is None:
-            is_allowed = _allowed_routes_check(
-                user_route=user_route, allowed_routes=["management_routes"]
-            )
-            return is_allowed
-        elif litellm_proxy_roles.admin_allowed_routes is not None:
-            is_allowed = _allowed_routes_check(
-                user_route=user_route,
-                allowed_routes=litellm_proxy_roles.admin_allowed_routes,
-            )
-            return is_allowed
+    if user_role == LitellmUserRoles.PROXY_ADMIN:
+        is_allowed = _allowed_routes_check(
+            user_route=user_route,
+            allowed_routes=litellm_proxy_roles.admin_allowed_routes,
+        )
+        return is_allowed
 
-    elif user_role == "team":
+    elif user_role == LitellmUserRoles.TEAM:
         if litellm_proxy_roles.team_allowed_routes is None:
             """
             By default allow a team to call openai + info routes
@@ -209,17 +232,32 @@ async def get_end_user_object(
     if end_user_id is None:
         return None
     _key = "end_user_id:{}".format(end_user_id)
+
+    def check_in_budget(end_user_obj: LiteLLM_EndUserTable):
+        if end_user_obj.litellm_budget_table is None:
+            return
+        end_user_budget = end_user_obj.litellm_budget_table.max_budget
+        if end_user_budget is not None and end_user_obj.spend > end_user_budget:
+            raise litellm.BudgetExceededError(
+                current_cost=end_user_obj.spend, max_budget=end_user_budget
+            )
+
     # check if in cache
     cached_user_obj = await user_api_key_cache.async_get_cache(key=_key)
     if cached_user_obj is not None:
         if isinstance(cached_user_obj, dict):
-            return LiteLLM_EndUserTable(**cached_user_obj)
+            return_obj = LiteLLM_EndUserTable(**cached_user_obj)
+            check_in_budget(end_user_obj=return_obj)
+            return return_obj
         elif isinstance(cached_user_obj, LiteLLM_EndUserTable):
-            return cached_user_obj
+            return_obj = cached_user_obj
+            check_in_budget(end_user_obj=return_obj)
+            return return_obj
     # else, check db
     try:
         response = await prisma_client.db.litellm_endusertable.find_unique(
-            where={"user_id": end_user_id}
+            where={"user_id": end_user_id},
+            include={"litellm_budget_table": True},
         )
 
         if response is None:
@@ -232,8 +270,12 @@ async def get_end_user_object(
 
         _response = LiteLLM_EndUserTable(**response.dict())
 
+        check_in_budget(end_user_obj=_response)
+
         return _response
     except Exception as e:  # if end-user not in db
+        if isinstance(e, litellm.BudgetExceededError):
+            raise e
         return None
 
 

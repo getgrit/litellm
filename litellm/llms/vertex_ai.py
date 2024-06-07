@@ -3,7 +3,7 @@ import json
 from enum import Enum
 import requests  # type: ignore
 import time
-from typing import Callable, Optional, Union, List, Literal
+from typing import Callable, Optional, Union, List, Literal, Any
 from litellm.utils import ModelResponse, Usage, CustomStreamWrapper, map_finish_reason
 import litellm, uuid
 import httpx, inspect  # type: ignore
@@ -297,24 +297,29 @@ def _convert_gemini_role(role: str) -> Literal["user", "model"]:
 
 def _process_gemini_image(image_url: str) -> PartType:
     try:
-        if "gs://" in image_url:
-            # Case 1: Images with Cloud Storage URIs
+        if ".mp4" in image_url and "gs://" in image_url:
+            # Case 1: Videos with Cloud Storage URIs
+            part_mime = "video/mp4"
+            _file_data = FileDataType(mime_type=part_mime, file_uri=image_url)
+            return PartType(file_data=_file_data)
+        elif ".pdf" in image_url and "gs://" in image_url:
+            # Case 2: PDF's with Cloud Storage URIs
+            part_mime = "application/pdf"
+            _file_data = FileDataType(mime_type=part_mime, file_uri=image_url)
+            return PartType(file_data=_file_data)
+        elif "gs://" in image_url:
+            # Case 3: Images with Cloud Storage URIs
             # The supported MIME types for images include image/png and image/jpeg.
             part_mime = "image/png" if "png" in image_url else "image/jpeg"
             _file_data = FileDataType(mime_type=part_mime, file_uri=image_url)
             return PartType(file_data=_file_data)
         elif "https:/" in image_url:
-            # Case 2: Images with direct links
+            # Case 4: Images with direct links
             image = _load_image_from_url(image_url)
             _blob = BlobType(data=image.data, mime_type=image._mime_type)
             return PartType(inline_data=_blob)
-        elif ".mp4" in image_url and "gs://" in image_url:
-            # Case 3: Videos with Cloud Storage URIs
-            part_mime = "video/mp4"
-            _file_data = FileDataType(mime_type=part_mime, file_uri=image_url)
-            return PartType(file_data=_file_data)
         elif "base64" in image_url:
-            # Case 4: Images with base64 encoding
+            # Case 5: Images with base64 encoding
             import base64, re
 
             # base 64 is passed as data:image/jpeg;base64,<base-64-encoded-image>
@@ -376,17 +381,31 @@ def _gemini_convert_messages_with_history(messages: list) -> List[ContentType]:
         assistant_content = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
-            assistant_text = (
-                messages[msg_i].get("content") or ""
-            )  # either string or none
-            if assistant_text:
-                assistant_content.append(PartType(text=assistant_text))
-            if messages[msg_i].get(
+            if isinstance(messages[msg_i]["content"], list):
+                _parts = []
+                for element in messages[msg_i]["content"]:
+                    if isinstance(element, dict):
+                        if element["type"] == "text":
+                            _part = PartType(text=element["text"])
+                            _parts.append(_part)
+                        elif element["type"] == "image_url":
+                            image_url = element["image_url"]["url"]
+                            _part = _process_gemini_image(image_url=image_url)
+                            _parts.append(_part)  # type: ignore
+                assistant_content.extend(_parts)
+            elif messages[msg_i].get(
                 "tool_calls", []
-            ):  # support assistant tool invoke convertion
+            ):  # support assistant tool invoke conversion
                 assistant_content.extend(
                     convert_to_gemini_tool_call_invoke(messages[msg_i]["tool_calls"])
                 )
+            else:
+                assistant_text = (
+                    messages[msg_i].get("content") or ""
+                )  # either string or none
+                if assistant_text:
+                    assistant_content.append(PartType(text=assistant_text))
+
             msg_i += 1
 
         if assistant_content:
@@ -513,6 +532,19 @@ def _gemini_vision_convert_messages(messages: list):
         raise e
 
 
+def _get_client_cache_key(model: str, vertex_project: str, vertex_location: str):
+    _cache_key = f"{model}-{vertex_project}-{vertex_location}"
+    return _cache_key
+
+
+def _get_client_from_cache(client_cache_key: str):
+    return litellm.in_memory_llm_clients_cache.get(client_cache_key, None)
+
+
+def _set_client_in_cache(client_cache_key: str, vertex_llm_model: Any):
+    litellm.in_memory_llm_clients_cache[client_cache_key] = vertex_llm_model
+
+
 def completion(
     model: str,
     messages: list,
@@ -566,23 +598,32 @@ def completion(
         print_verbose(
             f"VERTEX AI: vertex_project={vertex_project}; vertex_location={vertex_location}"
         )
-        if vertex_credentials is not None and isinstance(vertex_credentials, str):
-            import google.oauth2.service_account
 
-            json_obj = json.loads(vertex_credentials)
+        _cache_key = _get_client_cache_key(
+            model=model, vertex_project=vertex_project, vertex_location=vertex_location
+        )
+        _vertex_llm_model_object = _get_client_from_cache(client_cache_key=_cache_key)
 
-            creds = google.oauth2.service_account.Credentials.from_service_account_info(
-                json_obj,
-                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        if _vertex_llm_model_object is None:
+            if vertex_credentials is not None and isinstance(vertex_credentials, str):
+                import google.oauth2.service_account
+
+                json_obj = json.loads(vertex_credentials)
+
+                creds = (
+                    google.oauth2.service_account.Credentials.from_service_account_info(
+                        json_obj,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
+                )
+            else:
+                creds, _ = google.auth.default(quota_project_id=vertex_project)
+            print_verbose(
+                f"VERTEX AI: creds={creds}; google application credentials: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}"
             )
-        else:
-            creds, _ = google.auth.default(quota_project_id=vertex_project)
-        print_verbose(
-            f"VERTEX AI: creds={creds}; google application credentials: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}"
-        )
-        vertexai.init(
-            project=vertex_project, location=vertex_location, credentials=creds
-        )
+            vertexai.init(
+                project=vertex_project, location=vertex_location, credentials=creds
+            )
 
         ## Load Config
         config = litellm.VertexAIConfig.get_config()
@@ -606,9 +647,9 @@ def completion(
 
         prompt = " ".join(
             [
-                message["content"]
+                message.get("content")
                 for message in messages
-                if isinstance(message["content"], str)
+                if isinstance(message.get("content", None), str)
             ]
         )
 
@@ -625,23 +666,27 @@ def completion(
             model in litellm.vertex_language_models
             or model in litellm.vertex_vision_models
         ):
-            llm_model = GenerativeModel(model)
+            llm_model = _vertex_llm_model_object or GenerativeModel(model)
             mode = "vision"
             request_str += f"llm_model = GenerativeModel({model})\n"
         elif model in litellm.vertex_chat_models:
-            llm_model = ChatModel.from_pretrained(model)
+            llm_model = _vertex_llm_model_object or ChatModel.from_pretrained(model)
             mode = "chat"
             request_str += f"llm_model = ChatModel.from_pretrained({model})\n"
         elif model in litellm.vertex_text_models:
-            llm_model = TextGenerationModel.from_pretrained(model)
+            llm_model = _vertex_llm_model_object or TextGenerationModel.from_pretrained(
+                model
+            )
             mode = "text"
             request_str += f"llm_model = TextGenerationModel.from_pretrained({model})\n"
         elif model in litellm.vertex_code_text_models:
-            llm_model = CodeGenerationModel.from_pretrained(model)
+            llm_model = _vertex_llm_model_object or CodeGenerationModel.from_pretrained(
+                model
+            )
             mode = "text"
             request_str += f"llm_model = CodeGenerationModel.from_pretrained({model})\n"
         elif model in litellm.vertex_code_chat_models:  # vertex_code_llm_models
-            llm_model = CodeChatModel.from_pretrained(model)
+            llm_model = _vertex_llm_model_object or CodeChatModel.from_pretrained(model)
             mode = "chat"
             request_str += f"llm_model = CodeChatModel.from_pretrained({model})\n"
         elif model == "private":
@@ -1018,6 +1063,15 @@ async def async_completion(
                 generation_config=optional_params,
                 safety_settings=safety_settings,
                 tools=tools,
+            )
+
+            _cache_key = _get_client_cache_key(
+                model=model,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
+            )
+            _set_client_in_cache(
+                client_cache_key=_cache_key, vertex_llm_model=llm_model
             )
 
             if tools is not None and bool(

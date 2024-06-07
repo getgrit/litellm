@@ -295,6 +295,7 @@ async def test_vertex_ai_anthropic_async_streaming():
 def test_vertex_ai():
     import random
 
+    litellm.num_retries = 3
     load_vertex_ai_credentials()
     test_models = (
         litellm.vertex_chat_models
@@ -975,3 +976,27 @@ def test_prompt_factory():
     translated_messages = _gemini_convert_messages_with_history(messages=messages)
 
     print(f"\n\ntranslated_messages: {translated_messages}\ntranslated_messages")
+
+
+def test_prompt_factory_nested():
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "hi"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Hi! 👋 \n\nHow can I help you today? 😊 \n"}
+            ],
+        },
+        {"role": "user", "content": [{"type": "text", "text": "hi 2nd time"}]},
+    ]
+
+    translated_messages = _gemini_convert_messages_with_history(messages=messages)
+
+    print(f"\n\ntranslated_messages: {translated_messages}\ntranslated_messages")
+
+    for message in translated_messages:
+        assert len(message["parts"]) == 1
+        assert "text" in message["parts"][0], "Missing 'text' from 'parts'"
+        assert isinstance(
+            message["parts"][0]["text"], str
+        ), "'text' value not a string."
