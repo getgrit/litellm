@@ -54,4 +54,5 @@ litellm_settings:
     host: os.environ/REDIS_HOST
     port: os.environ/REDIS_PORT
     password: os.environ/REDIS_PASSWORD
-  success_callback: ["traceloop"]
+  # success_callback: ["traceloop"]
+  callbacks: ["otel"]
