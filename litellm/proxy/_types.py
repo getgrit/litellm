@@ -1,11 +1,20 @@
 from pydantic import BaseModel, Extra, Field, model_validator, Json, ConfigDict
 from dataclasses import fields
 import enum
-from typing import Optional, List, Union, Dict, Literal, Any
+from typing import Optional, List, Union, Dict, Literal, Any, TypedDict, TYPE_CHECKING
 from datetime import datetime
 import uuid, json, sys, os
 from litellm.types.router import UpdateRouterConfig
 from litellm.types.utils import ProviderField
+from typing_extensions import Annotated
+
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span as _Span
+
+    Span = _Span
+else:
+    Span = Any
 
 
 class LitellmUserRoles(str, enum.Enum):
@@ -710,6 +719,8 @@ class Member(LiteLLMBase):
     @model_validator(mode="before")
     @classmethod
     def check_user_info(cls, values):
+        if not isinstance(values, dict):
+            raise ValueError("input needs to be a dictionary")
         if values.get("user_id") is None and values.get("user_email") is None:
             raise ValueError("Either user id or user email must be provided")
         return values
@@ -748,8 +759,23 @@ class GlobalEndUsersSpend(LiteLLMBase):
 
 class TeamMemberAddRequest(LiteLLMBase):
     team_id: str
-    member: Member
+    member: Union[List[Member], Member]
     max_budget_in_team: Optional[float] = None  # Users max budget within the team
+
+    def __init__(self, **data):
+        member_data = data.get("member")
+        if isinstance(member_data, list):
+            # If member is a list of dictionaries, convert each dictionary to a Member object
+            members = [Member(**item) for item in member_data]
+            # Replace member_data with the list of Member objects
+            data["member"] = members
+        elif isinstance(member_data, dict):
+            # If member is a dictionary, convert it to a single Member object
+            member = Member(**member_data)
+            # Replace member_data with the single Member object
+            data["member"] = member
+        # Call the superclass __init__ method to initialize the object
+        super().__init__(**data)
 
 
 class TeamMemberDeleteRequest(LiteLLMBase):
@@ -1195,6 +1221,7 @@ class UserAPIKeyAuth(
         ]
     ] = None
     allowed_model_region: Optional[Literal["eu"]] = None
+    parent_otel_span: Optional[Span] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1206,6 +1233,9 @@ class UserAPIKeyAuth(
             ).startswith("sk-"):
                 values.update({"api_key": hash_token(values.get("api_key"))})
         return values
+
+    class Config:
+        arbitrary_types_allowed = True
 
 
 class LiteLLM_Config(LiteLLMBase):
@@ -1268,7 +1298,7 @@ class LiteLLM_SpendLogs(LiteLLMBase):
     startTime: Union[str, datetime, None]
     endTime: Union[str, datetime, None]
     user: Optional[str] = ""
-    metadata: Optional[dict] = {}
+    metadata: Optional[Json] = {}
     cache_hit: Optional[str] = "False"
     cache_key: Optional[str] = None
     request_tags: Optional[Json] = None
@@ -1292,6 +1322,7 @@ class LiteLLM_AuditLogs(LiteLLMBase):
     id: str
     updated_at: datetime
     changed_by: str
+    changed_by_api_key: Optional[str] = None
     action: Literal["created", "updated", "deleted"]
     table_name: Literal[
         LitellmTableNames.TEAM_TABLE_NAME,
@@ -1446,3 +1477,99 @@ class AllCallbacks(LiteLLMBase):
         litellm_callback_params=["DD_API_KEY", "DD_SITE"],
         ui_callback_name="Datadog",
     )
+
+
+class SpendLogsMetadata(TypedDict):
+    """
+    Specific metadata k,v pairs logged to spendlogs for easier cost tracking
+    """
+
+    user_api_key: Optional[str]
+    user_api_key_alias: Optional[str]
+    user_api_key_team_id: Optional[str]
+    user_api_key_user_id: Optional[str]
+    user_api_key_team_alias: Optional[str]
+    spend_logs_metadata: Optional[
+        dict
+    ]  # special param to log k,v pairs to spendlogs for a call
+
+
+class SpendLogsPayload(TypedDict):
+    request_id: str
+    call_type: str
+    api_key: str
+    spend: float
+    total_tokens: int
+    prompt_tokens: int
+    completion_tokens: int
+    startTime: datetime
+    endTime: datetime
+    completionStartTime: Optional[datetime]
+    model: str
+    model_id: Optional[str]
+    model_group: Optional[str]
+    api_base: str
+    user: str
+    metadata: str  # json str
+    cache_hit: str
+    cache_key: str
+    request_tags: str  # json str
+    team_id: Optional[str]
+    end_user: Optional[str]
+
+
+class SpanAttributes(str, enum.Enum):
+    # Note: We've taken this from opentelemetry-semantic-conventions-ai
+    # I chose to not add a new dependency to litellm for this
+
+    # Semantic Conventions for LLM requests, this needs to be removed after
+    # OpenTelemetry Semantic Conventions support Gen AI.
+    # Issue at https://github.com/open-telemetry/opentelemetry-python/issues/3868
+    # Refer to https://github.com/open-telemetry/semantic-conventions/blob/main/docs/gen-ai/llm-spans.md
+
+    LLM_SYSTEM = "gen_ai.system"
+    LLM_REQUEST_MODEL = "gen_ai.request.model"
+    LLM_REQUEST_MAX_TOKENS = "gen_ai.request.max_tokens"
+    LLM_REQUEST_TEMPERATURE = "gen_ai.request.temperature"
+    LLM_REQUEST_TOP_P = "gen_ai.request.top_p"
+    LLM_PROMPTS = "gen_ai.prompt"
+    LLM_COMPLETIONS = "gen_ai.completion"
+    LLM_RESPONSE_MODEL = "gen_ai.response.model"
+    LLM_USAGE_COMPLETION_TOKENS = "gen_ai.usage.completion_tokens"
+    LLM_USAGE_PROMPT_TOKENS = "gen_ai.usage.prompt_tokens"
+    LLM_TOKEN_TYPE = "gen_ai.token.type"
+    # To be added
+    # LLM_RESPONSE_FINISH_REASON = "gen_ai.response.finish_reasons"
+    # LLM_RESPONSE_ID = "gen_ai.response.id"
+
+    # LLM
+    LLM_REQUEST_TYPE = "llm.request.type"
+    LLM_USAGE_TOTAL_TOKENS = "llm.usage.total_tokens"
+    LLM_USAGE_TOKEN_TYPE = "llm.usage.token_type"
+    LLM_USER = "llm.user"
+    LLM_HEADERS = "llm.headers"
+    LLM_TOP_K = "llm.top_k"
+    LLM_IS_STREAMING = "llm.is_streaming"
+    LLM_FREQUENCY_PENALTY = "llm.frequency_penalty"
+    LLM_PRESENCE_PENALTY = "llm.presence_penalty"
+    LLM_CHAT_STOP_SEQUENCES = "llm.chat.stop_sequences"
+    LLM_REQUEST_FUNCTIONS = "llm.request.functions"
+    LLM_REQUEST_REPETITION_PENALTY = "llm.request.repetition_penalty"
+    LLM_RESPONSE_FINISH_REASON = "llm.response.finish_reason"
+    LLM_RESPONSE_STOP_REASON = "llm.response.stop_reason"
+    LLM_CONTENT_COMPLETION_CHUNK = "llm.content.completion.chunk"
+
+    # OpenAI
+    LLM_OPENAI_RESPONSE_SYSTEM_FINGERPRINT = "gen_ai.openai.system_fingerprint"
+    LLM_OPENAI_API_BASE = "gen_ai.openai.api_base"
+    LLM_OPENAI_API_VERSION = "gen_ai.openai.api_version"
+    LLM_OPENAI_API_TYPE = "gen_ai.openai.api_type"
+
+
+class ManagementEndpointLoggingPayload(LiteLLMBase):
+    route: str
+    request_data: dict
+    response: Optional[dict] = None
+    exception: Optional[Any] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None

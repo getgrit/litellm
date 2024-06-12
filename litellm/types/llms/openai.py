@@ -293,3 +293,33 @@ class ListBatchRequest(TypedDict, total=False):
     extra_headers: Optional[Dict[str, str]]
     extra_body: Optional[Dict[str, str]]
     timeout: Optional[float]
+
+
+class ChatCompletionToolCallFunctionChunk(TypedDict):
+    name: Optional[str]
+    arguments: str
+
+
+class ChatCompletionToolCallChunk(TypedDict):
+    id: Optional[str]
+    type: Literal["function"]
+    function: ChatCompletionToolCallFunctionChunk
+
+
+class ChatCompletionDeltaToolCallChunk(TypedDict):
+    id: str
+    type: Literal["function"]
+    function: ChatCompletionToolCallFunctionChunk
+    index: int
+
+
+class ChatCompletionDeltaChunk(TypedDict, total=False):
+    content: Optional[str]
+    tool_calls: List[ChatCompletionDeltaToolCallChunk]
+    role: str
+
+
+class ChatCompletionResponseMessage(TypedDict, total=False):
+    content: Optional[str]
+    tool_calls: List[ChatCompletionToolCallChunk]
+    role: Literal["assistant"]

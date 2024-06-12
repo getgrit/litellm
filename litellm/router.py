@@ -2057,11 +2057,14 @@ class Router:
                     generic_fallback_idx: Optional[int] = None
                     ## check for specific model group-specific fallbacks
                     for idx, item in enumerate(fallbacks):
-                        if list(item.keys())[0] == model_group:
-                            fallback_model_group = item[model_group]
-                            break
-                        elif list(item.keys())[0] == "*":
-                            generic_fallback_idx = idx
+                        if isinstance(item, dict):
+                            if list(item.keys())[0] == model_group:
+                                fallback_model_group = item[model_group]
+                                break
+                            elif list(item.keys())[0] == "*":
+                                generic_fallback_idx = idx
+                        elif isinstance(item, str):
+                            fallback_model_group = [fallbacks.pop(idx)]
                     ## if none, check for generic fallback
                     if (
                         fallback_model_group is None
@@ -2310,13 +2313,15 @@ class Router:
                     verbose_router_logger.debug(f"inside model fallbacks: {fallbacks}")
                     fallback_model_group = None
                     generic_fallback_idx: Optional[int] = None
-                    ## check for specific model group-specific fallbacks
                     for idx, item in enumerate(fallbacks):
-                        if list(item.keys())[0] == model_group:
-                            fallback_model_group = item[model_group]
-                            break
-                        elif list(item.keys())[0] == "*":
-                            generic_fallback_idx = idx
+                        if isinstance(item, dict):
+                            if list(item.keys())[0] == model_group:
+                                fallback_model_group = item[model_group]
+                                break
+                            elif list(item.keys())[0] == "*":
+                                generic_fallback_idx = idx
+                        elif isinstance(item, str):
+                            fallback_model_group = [fallbacks.pop(idx)]
                     ## if none, check for generic fallback
                     if (
                         fallback_model_group is None
@@ -3610,7 +3615,7 @@ class Router:
                 # get model info
                 try:
                     model_info = litellm.get_model_info(model=litellm_params.model)
-                except Exception as e:
+                except Exception:
                     model_info = None
                 # get llm provider
                 try:
@@ -3619,7 +3624,9 @@ class Router:
                         custom_llm_provider=litellm_params.custom_llm_provider,
                     )
                 except litellm.exceptions.BadRequestError as e:
-                    continue
+                    verbose_router_logger.error(
+                        "litellm.router.py::get_model_group_info() - {}".format(str(e))
+                    )
 
                 if model_info is None:
                     supported_openai_params = litellm.get_supported_openai_params(

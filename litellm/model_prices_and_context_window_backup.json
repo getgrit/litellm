@@ -1357,6 +1357,26 @@
         "mode": "image_generation",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing"
     },
+    "text-embedding-004": {
+        "max_tokens": 3072,
+        "max_input_tokens": 3072,
+        "output_vector_size": 768,
+        "input_cost_per_token": 0.00000000625,
+        "output_cost_per_token": 0,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "mode": "embedding",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
+    },
+    "text-multilingual-embedding-002": {
+        "max_tokens": 2048,
+        "max_input_tokens": 2048,
+        "output_vector_size": 768,
+        "input_cost_per_token": 0.00000000625,
+        "output_cost_per_token": 0,
+        "litellm_provider": "vertex_ai-embedding-models",
+        "mode": "embedding",
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/learn/models"
+    },
     "textembedding-gecko": {
         "max_tokens": 3072,
         "max_input_tokens": 3072,
@@ -3009,30 +3029,35 @@
         "litellm_provider": "sagemaker",
         "mode": "chat"
     },
-    "together-ai-up-to-3b": {
+    "together-ai-up-to-4b": {
         "input_cost_per_token": 0.0000001,
         "output_cost_per_token": 0.0000001,
         "litellm_provider": "together_ai"
     },
-    "together-ai-3.1b-7b": {
+    "together-ai-4.1b-8b": {
         "input_cost_per_token": 0.0000002,
         "output_cost_per_token": 0.0000002,
         "litellm_provider": "together_ai"
     },
-    "together-ai-7.1b-20b": {
+    "together-ai-8.1b-21b": {
         "max_tokens": 1000,
-        "input_cost_per_token": 0.0000004,
-        "output_cost_per_token": 0.0000004,
+        "input_cost_per_token": 0.0000003,
+        "output_cost_per_token": 0.0000003,
         "litellm_provider": "together_ai"
     },
-    "together-ai-20.1b-40b": {
+    "together-ai-21.1b-41b": {
         "input_cost_per_token": 0.0000008,
         "output_cost_per_token": 0.0000008,
         "litellm_provider": "together_ai"
     },
-    "together-ai-40.1b-70b": {
+    "together-ai-41.1b-80b": {
         "input_cost_per_token": 0.0000009,
         "output_cost_per_token": 0.0000009,
+        "litellm_provider": "together_ai"
+    },
+    "together-ai-81.1b-110b": {
+        "input_cost_per_token": 0.0000018,
+        "output_cost_per_token": 0.0000018,
         "litellm_provider": "together_ai"
     },
     "together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1": {

@@ -16,7 +16,7 @@ from litellm.llms.prompt_templates.factory import anthropic_messages_pt
 from unittest.mock import patch, MagicMock
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
 
-# litellm.num_retries=3
+# litellm.num_retries = 3
 litellm.cache = None
 litellm.success_callback = []
 user_message = "Write a short poem about the sky"
@@ -112,6 +112,27 @@ def test_null_role_response():
         assert response.id == "chatcmpl-123"
 
         assert response.choices[0].message.role == "assistant"
+
+
+def test_completion_azure_ai_command_r():
+    try:
+        import os
+
+        litellm.set_verbose = True
+
+        os.environ["AZURE_AI_API_BASE"] = os.getenv("AZURE_COHERE_API_BASE", "")
+        os.environ["AZURE_AI_API_KEY"] = os.getenv("AZURE_COHERE_API_KEY", "")
+
+        response: litellm.ModelResponse = completion(
+            model="azure_ai/command-r-plus",
+            messages=[{"role": "user", "content": "What is the meaning of life?"}],
+        )  # type: ignore
+
+        assert "azure_ai" in response.model
+    except litellm.Timeout as e:
+        pass
+    except Exception as e:
+        pytest.fail(f"Error occurred: {e}")
 
 
 def test_completion_azure_command_r():
@@ -300,7 +321,11 @@ def test_completion_claude_3():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_completion_claude_3_function_call():
+@pytest.mark.parametrize(
+    "model",
+    ["anthropic/claude-3-opus-20240229", "anthropic.claude-3-sonnet-20240229-v1:0"],
+)
+def test_completion_claude_3_function_call(model):
     litellm.set_verbose = True
     tools = [
         {
@@ -331,16 +356,17 @@ def test_completion_claude_3_function_call():
     try:
         # test without max tokens
         response = completion(
-            model="anthropic/claude-3-opus-20240229",
+            model=model,
             messages=messages,
             tools=tools,
             tool_choice={
                 "type": "function",
                 "function": {"name": "get_current_weather"},
             },
+            drop_params=True,
         )
 
-        # Add any assertions, here to check response args
+        # Add any assertions here to check response args
         print(response)
         assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
         assert isinstance(
@@ -364,10 +390,11 @@ def test_completion_claude_3_function_call():
         )
         # In the second response, Claude should deduce answer from tool results
         second_response = completion(
-            model="anthropic/claude-3-opus-20240229",
+            model=model,
             messages=messages,
             tools=tools,
             tool_choice="auto",
+            drop_params=True,
         )
         print(second_response)
     except Exception as e:
@@ -524,6 +551,7 @@ def test_completion_cohere_command_r_plus_function_call():
             messages=messages,
             tools=tools,
             tool_choice="auto",
+            force_single_step=True,
         )
         print(second_response)
     except Exception as e:
@@ -714,7 +742,11 @@ def test_completion_claude_3_function_plus_image():
     print(response)
 
 
-def test_completion_azure_mistral_large_function_calling():
+@pytest.mark.parametrize(
+    "provider",
+    ["azure", "azure_ai"],
+)
+def test_completion_azure_mistral_large_function_calling(provider):
     """
     This primarily tests if the 'Function()' pydantic object correctly handles argument param passed in as a dict vs. string
     """
@@ -745,8 +777,9 @@ def test_completion_azure_mistral_large_function_calling():
             "content": "What's the weather like in Boston today in Fahrenheit?",
         }
     ]
+
     response = completion(
-        model="azure/mistral-large-latest",
+        model="{}/mistral-large-latest".format(provider),
         api_base=os.getenv("AZURE_MISTRAL_API_BASE"),
         api_key=os.getenv("AZURE_MISTRAL_API_KEY"),
         messages=messages,
@@ -1398,7 +1431,6 @@ def test_hf_test_completion_tgi():
 
 
 def mock_post(url, data=None, json=None, headers=None):
-
     print(f"url={url}")
     if "text-classification" in url:
         raise Exception("Model not found")
@@ -2241,9 +2273,6 @@ def test_re_use_openaiClient():
         pytest.fail("got Exception", e)
 
 
-# test_re_use_openaiClient()
-
-
 def test_completion_azure():
     try:
         print("azure gpt-3.5 test\n\n")
@@ -2255,7 +2284,7 @@ def test_completion_azure():
             api_key="os.environ/AZURE_API_KEY",
         )
         print(f"response: {response}")
-        ## Test azure flag for backwards compat
+        ## Test azure flag for backwards-compat
         # response = completion(
         #     model="chatgpt-v-2",
         #     messages=messages,
@@ -2540,7 +2569,6 @@ def test_replicate_custom_prompt_dict():
                 }
             ],
             mock_response="Hello world",
-            mock_response="hello world",
             repetition_penalty=0.1,
             num_retries=3,
         )
