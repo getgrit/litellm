@@ -60,4 +60,4 @@ const QuickStartCodeBlock = ({ token }) => {
   );
   }
 
-  export default QuickStart;
+  export const QuickStart = QuickStart;

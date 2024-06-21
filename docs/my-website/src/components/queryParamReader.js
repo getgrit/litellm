@@ -58,4 +58,4 @@ const QueryParamReader = () => {
   );
 }
 
-export default QueryParamReader;
+export const queryParamReader = QueryParamReader;

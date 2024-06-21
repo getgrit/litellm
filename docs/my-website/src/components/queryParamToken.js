@@ -16,4 +16,4 @@ const QueryParamToken = () => {
   );
 }
 
-export default QueryParamToken;
+export const queryParamToken = QueryParamToken;

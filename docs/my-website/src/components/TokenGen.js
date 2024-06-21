@@ -47,4 +47,4 @@ return (
 );
 };
 
-export default TokenGen;
+export const TokenGen = TokenGen;
