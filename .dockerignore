@@ -3,3 +3,4 @@ cookbook
 .circleci
 .github
 tests
+.env
